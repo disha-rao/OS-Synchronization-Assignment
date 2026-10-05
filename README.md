@@ -1,7 +1,7 @@
 # OS Synchronization Assignment - Readers-Writers & Dining Philosophers (Java)
 
-**Student Name:** <Disha S Rao>  
-**USN:** <NNM24IS076>  
+**Student Name:** Disha S Rao 
+**USN:** NNM24IS076
 **Course:** Operating Systems - AI-Assisted Synchronization and Visualization
 
 ## 1. What this project contains
