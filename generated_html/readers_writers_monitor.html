@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Readers-Writers - Monitor Solution</title>
+<style>
+:root{--bg:#f4f6fa;--fg:#1c2230;--card:#ffffff;--line:#d6dbe5;--muted:#667085;}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#10131a;--fg:#e8ebf2;--card:#1a1f2c;--line:#2e3649;--muted:#98a2b3;}
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--fg);}
+header{padding:14px 20px;border-bottom:1px solid var(--line);background:var(--card);}
+header h1{margin:0;font-size:20px}
+header p{margin:4px 0 0;color:var(--muted);font-size:13px}
+main{max-width:1100px;margin:0 auto;padding:14px 16px 30px;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px;}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+button,select{font:inherit;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg);cursor:pointer;}
+button:hover{border-color:#4f7cff}
+#scrub{flex:1;min-width:160px}
+#clock{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px;min-width:130px;text-align:right}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+#stage{min-height:260px}
+.cols{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:12px}
+@media (max-width:760px){.cols{grid-template-columns:1fr}}
+.col h3{margin:0 0 8px;font-size:14px;color:var(--muted)}
+.actor{display:flex;justify-content:space-between;align-items:center;border:2px solid;border-radius:8px;padding:8px 10px;margin-bottom:8px;transition:all .15s}
+.badge{color:#fff;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600}
+.res{border:3px solid;border-radius:12px;padding:14px;text-align:center;transition:all .15s}
+.res .big{font-size:36px;font-weight:700}
+.res .st{font-weight:600;margin-top:4px}
+.warn{margin-top:8px;padding:6px;border-radius:8px;background:#e5484d;color:#fff;font-weight:700}
+.ok{margin-top:8px;font-size:12px;color:var(--muted)}
+.mini{font-size:12px;color:var(--muted);margin-top:8px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left}
+.lane{display:flex;align-items:center;height:22px;margin-bottom:3px}
+.lab{width:44px;font-size:12px;color:var(--muted)}
+.bar{position:relative;flex:1;height:16px;background:var(--bg);border-radius:4px;overflow:hidden}
+.seg{position:absolute;top:0;height:100%}
+#timeline{position:relative}
+#cursor{position:absolute;top:0;bottom:0;width:2px;background:#4f7cff;pointer-events:none}
+#log{height:210px;overflow-y:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:4px;position:relative}
+.row{padding:2px 6px;border-radius:4px;cursor:pointer;white-space:pre-wrap}
+.row.future{opacity:.35}
+.row.cur{background:#4f7cff;color:#fff;opacity:1}
+svg text{fill:var(--fg);font-family:system-ui,Arial,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>Readers-Writers - Monitor Solution</h1>
+  <p>Monitor = ReentrantLock + Condition variables (okToRead, okToWrite), writer priority | 4 readers, 2 writers &mdash; generated from the execution trace of the Java program (<span id="evcount"></span> events).</p>
+</header>
+<main>
+  <div class="card">
+    <div class="controls">
+      <button id="btnPlay">&#9654; Play</button>
+      <button id="btnStep">Step &#9654;|</button>
+      <button id="btnReset">&#8634; Reset</button>
+      <label>Speed
+        <select id="speed">
+          <option value="0.25">0.25x</option><option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option>
+        </select>
+      </label>
+      <input type="range" id="scrub" min="0" value="0" step="1">
+      <span id="clock"></span>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card"><div id="stage"></div></div>
+
+  <div class="card">
+    <b style="font-size:14px">Timeline</b> <span style="color:var(--muted);font-size:12px">(one lane per thread; blue line = current time)</span>
+    <div id="timeline" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <b style="font-size:14px">Event log</b> <span style="color:var(--muted);font-size:12px">(click a line to jump to it)</span>
+    <div id="log" style="margin-top:8px"></div>
+  </div>
+</main>
+
+<script>
+/* ============ DATA INJECTED BY THE JAVA PROGRAM ============ */
+const TRACE  = [{"t":45,"type":"state","actor":"R1","state":"IDLE","msg":"reader created, doing other work"},{"t":82,"type":"state","actor":"W1","state":"IDLE","msg":"writer created, doing other work"},{"t":83,"type":"state","actor":"R3","state":"IDLE","msg":"reader created, doing other work"},{"t":84,"type":"state","actor":"W2","state":"IDLE","msg":"writer created, doing other work"},{"t":86,"type":"state","actor":"R4","state":"IDLE","msg":"reader created, doing other work"},{"t":86,"type":"state","actor":"R2","state":"IDLE","msg":"reader created, doing other work"},{"t":193,"type":"state","actor":"R3","state":"WAITING","msg":"wants to read"},{"t":197,"type":"state","actor":"R3","state":"READING","msg":"entered critical section, readers inside = 1","value":0},{"t":319,"type":"state","actor":"R4","state":"WAITING","msg":"wants to read"},{"t":321,"type":"state","actor":"R4","state":"READING","msg":"entered critical section, readers inside = 2","value":0},{"t":401,"type":"state","actor":"W2","state":"WAITING","msg":"wants to write"},{"t":438,"type":"state","actor":"R1","state":"WAITING","msg":"wants to read"},{"t":472,"type":"state","actor":"W1","state":"WAITING","msg":"wants to write"},{"t":570,"type":"state","actor":"R2","state":"WAITING","msg":"wants to read"},{"t":734,"type":"state","actor":"R3","state":"IDLE","msg":"finished reading value 0, readers left inside = 1"},{"t":888,"type":"state","actor":"R4","state":"IDLE","msg":"finished reading value 0, readers left inside = 0"},{"t":889,"type":"state","actor":"W2","state":"WRITING","msg":"entered critical section (exclusive access)","value":0},{"t":1166,"type":"state","actor":"R3","state":"WAITING","msg":"wants to read"},{"t":1364,"type":"state","actor":"R4","state":"WAITING","msg":"wants to read"},{"t":1571,"type":"state","actor":"W2","state":"IDLE","msg":"finished writing, new value = 1","value":1},{"t":1572,"type":"state","actor":"W1","state":"WRITING","msg":"entered critical section (exclusive access)","value":1},{"t":2107,"type":"state","actor":"W1","state":"IDLE","msg":"finished writing, new value = 2","value":2},{"t":2108,"type":"state","actor":"R1","state":"READING","msg":"entered critical section, readers inside = 1","value":2},{"t":2109,"type":"state","actor":"R2","state":"READING","msg":"entered critical section, readers inside = 2","value":2},{"t":2109,"type":"state","actor":"R3","state":"READING","msg":"entered critical section, readers inside = 3","value":2},{"t":2109,"type":"state","actor":"R4","state":"READING","msg":"entered critical section, readers inside = 4","value":2},{"t":2332,"type":"state","actor":"W2","state":"WAITING","msg":"wants to write"},{"t":2453,"type":"state","actor":"R2","state":"IDLE","msg":"finished reading value 2, readers left inside = 3"},{"t":2550,"type":"state","actor":"R3","state":"IDLE","msg":"finished reading value 2, readers left inside = 2"},{"t":2565,"type":"state","actor":"R2","state":"WAITING","msg":"wants to read"},{"t":2623,"type":"state","actor":"W1","state":"WAITING","msg":"wants to write"},{"t":2660,"type":"state","actor":"R1","state":"IDLE","msg":"finished reading value 2, readers left inside = 1"},{"t":2705,"type":"state","actor":"R4","state":"IDLE","msg":"finished reading value 2, readers left inside = 0"},{"t":2706,"type":"state","actor":"W2","state":"WRITING","msg":"entered critical section (exclusive access)","value":2},{"t":2738,"type":"state","actor":"R3","state":"WAITING","msg":"wants to read"},{"t":2828,"type":"state","actor":"R1","state":"WAITING","msg":"wants to read"},{"t":3029,"type":"state","actor":"R4","state":"WAITING","msg":"wants to read"},{"t":3306,"type":"state","actor":"W2","state":"IDLE","msg":"finished writing, new value = 3","value":3},{"t":3307,"type":"state","actor":"W1","state":"WRITING","msg":"entered critical section (exclusive access)","value":3},{"t":3696,"type":"state","actor":"W2","state":"WAITING","msg":"wants to write"},{"t":3730,"type":"state","actor":"W1","state":"IDLE","msg":"finished writing, new value = 4","value":4},{"t":3731,"type":"state","actor":"W2","state":"WRITING","msg":"entered critical section (exclusive access)","value":4},{"t":4028,"type":"state","actor":"W1","state":"WAITING","msg":"wants to write"},{"t":4319,"type":"state","actor":"W2","state":"IDLE","msg":"finished writing, new value = 5","value":5},{"t":4320,"type":"state","actor":"W1","state":"WRITING","msg":"entered critical section (exclusive access)","value":5},{"t":4934,"type":"state","actor":"W1","state":"IDLE","msg":"finished writing, new value = 6","value":6},{"t":4937,"type":"state","actor":"R2","state":"READING","msg":"entered critical section, readers inside = 1","value":6},{"t":4938,"type":"state","actor":"R3","state":"READING","msg":"entered critical section, readers inside = 2","value":6},{"t":4938,"type":"state","actor":"R1","state":"READING","msg":"entered critical section, readers inside = 3","value":6},{"t":4938,"type":"state","actor":"R4","state":"READING","msg":"entered critical section, readers inside = 4","value":6},{"t":5316,"type":"state","actor":"R4","state":"IDLE","msg":"finished reading value 6, readers left inside = 3"},{"t":5336,"type":"state","actor":"R1","state":"IDLE","msg":"finished reading value 6, readers left inside = 2"},{"t":5471,"type":"state","actor":"R3","state":"IDLE","msg":"finished reading value 6, readers left inside = 1"},{"t":5513,"type":"state","actor":"R2","state":"IDLE","msg":"finished reading value 6, readers left inside = 0"},{"t":5794,"type":"state","actor":"R1","state":"WAITING","msg":"wants to read"},{"t":5797,"type":"state","actor":"R1","state":"READING","msg":"entered critical section, readers inside = 1","value":6},{"t":5962,"type":"state","actor":"R2","state":"WAITING","msg":"wants to read"},{"t":5963,"type":"state","actor":"R2","state":"READING","msg":"entered critical section, readers inside = 2","value":6},{"t":6374,"type":"state","actor":"R1","state":"IDLE","msg":"finished reading value 6, readers left inside = 1"},{"t":6543,"type":"state","actor":"R2","state":"IDLE","msg":"finished reading value 6, readers left inside = 0"}];     // every event recorded by the synchronization code
+const CONFIG = {"readers":4,"writers":2,"rounds":3};    // run configuration
+
+/* ============ PAGE-SPECIFIC DRAWING (Readers-Writers OR Philosophers) ============ */
+const ACTORS=[];
+for(let i=1;i<=CONFIG.readers;i++) ACTORS.push('R'+i);
+for(let i=1;i<=CONFIG.writers;i++) ACTORS.push('W'+i);
+const COLORS={IDLE:'#9aa4b2',WAITING:'#f59e0b',READING:'#22a06b',WRITING:'#e5484d'};
+
+function initState(){
+  const s={actors:{},value:0,entries:0,violation:false};
+  ACTORS.forEach(a=>s.actors[a]='IDLE');
+  return s;
+}
+
+/* apply ONE recorded event to the state */
+function applyEvent(s,e){
+  if(e.type!=='state') return;
+  s.actors[e.actor]=e.state;
+  if(e.value!==undefined) s.value=e.value;
+  if(e.state==='READING'||e.state==='WRITING') s.entries++;
+  const r=ACTORS.filter(a=>s.actors[a]==='READING').length;
+  const w=ACTORS.filter(a=>s.actors[a]==='WRITING').length;
+  if(w>1 || (w>=1 && r>=1)) s.violation=true;   // mutual exclusion broken!
+}
+
+function card(a,s){
+  const c=COLORS[s.actors[a]];
+  return '<div class="actor" style="border-color:'+c+'"><b>'+a+'</b>'
+        +'<span class="badge" style="background:'+c+'">'+s.actors[a]+'</span></div>';
+}
+
+function draw(s){
+  const readers=ACTORS.filter(a=>a[0]==='R'), writers=ACTORS.filter(a=>a[0]==='W');
+  const reading=readers.filter(a=>s.actors[a]==='READING');
+  const writing=writers.filter(a=>s.actors[a]==='WRITING');
+  const waiting=ACTORS.filter(a=>s.actors[a]==='WAITING');
+  let status,color;
+  if(writing.length){ status='LOCKED (exclusive) by '+writing.join(', '); color=COLORS.WRITING; }
+  else if(reading.length){ status='SHARED READ by '+reading.length+' reader(s): '+reading.join(', '); color=COLORS.READING; }
+  else { status='FREE'; color=COLORS.IDLE; }
+  $('stage').innerHTML=
+   '<div class="cols">'
+   +'<div class="col"><h3>READERS</h3>'+readers.map(a=>card(a,s)).join('')+'</div>'
+   +'<div class="col"><h3>SHARED RESOURCE (critical section)</h3>'
+   +'<div class="res" style="border-color:'+color+'"><div>counter value</div><div class="big">'+s.value+'</div>'
+   +'<div class="st" style="color:'+color+'">'+status+'</div></div>'
+   +(s.violation?'<div class="warn">MUTUAL EXCLUSION VIOLATED!</div>':'<div class="ok">Safety check: no reader/writer or writer/writer overlap so far</div>')
+   +'<div class="mini">Waiting queue: '+(waiting.length?waiting.join(', '):'(none)')+'<br>Critical-section entries so far: '+s.entries+'</div></div>'
+   +'<div class="col"><h3>WRITERS</h3>'+writers.map(a=>card(a,s)).join('')+'</div>'
+   +'</div>';
+}
+
+
+/* ============ COMMON PLAYER (same for all programs) ============ */
+const $ = id => document.getElementById(id);
+const total = Math.max(1, TRACE.length ? TRACE[TRACE.length-1].t : 1);
+let idx = -1, clock = 0, playing = false, lastTs = 0, speed = 1;
+
+$('evcount').textContent = TRACE.length;
+$('scrub').max = total;
+
+/* legend of state colours */
+Object.keys(COLORS).forEach(k=>{
+  const s=document.createElement('span');
+  s.innerHTML='<i style="background:'+COLORS[k]+'"></i>'+k;
+  $('legend').appendChild(s);
+});
+
+/* event log: one text row per event */
+TRACE.forEach((e,i)=>{
+  const d=document.createElement('div'); d.className='row future'; d.id='r'+i;
+  const what = e.type==='fork'
+      ? 'FORK F'+e.fork+' -> '+(e.owner<0?'free':'P'+e.owner)
+      : e.actor+' '+e.state;
+  d.textContent='['+String(e.t).padStart(6,' ')+' ms] '+what+'  '+e.msg;
+  d.onclick=()=>{ setPlaying(false); clock=e.t; seek(i); };
+  $('log').appendChild(d);
+});
+
+/* timeline: coloured segment = how long a thread stayed in one state */
+function buildTimeline(){
+  const tl=$('timeline');
+  ACTORS.forEach(a=>{
+    const lane=document.createElement('div'); lane.className='lane';
+    const lab=document.createElement('span'); lab.className='lab'; lab.textContent=a; lane.appendChild(lab);
+    const bar=document.createElement('div'); bar.className='bar';
+    const evs=TRACE.filter(e=>e.type==='state' && e.actor===a);
+    evs.forEach((e,k)=>{
+      const end = k+1<evs.length ? evs[k+1].t : total;
+      const seg=document.createElement('div'); seg.className='seg';
+      seg.style.left=(e.t/total*100)+'%';
+      seg.style.width=Math.max(0.15,(end-e.t)/total*100)+'%';
+      seg.style.background=COLORS[e.state]||'#888';
+      seg.title=a+': '+e.state+' ('+e.t+' - '+end+' ms)';
+      bar.appendChild(seg);
+    });
+    lane.appendChild(bar); tl.appendChild(lane);
+  });
+  const cur=document.createElement('div'); cur.id='cursor'; tl.appendChild(cur);
+}
+buildTimeline();
+
+/* index of the last event whose time <= t */
+function findIdx(t){
+  let lo=-1;
+  for(let i=0;i<TRACE.length;i++){ if(TRACE[i].t<=t) lo=i; else break; }
+  return lo;
+}
+
+/* Rebuild the complete state by applying events 0..i, then draw it */
+function seek(i){
+  idx=i;
+  const st=initState();
+  for(let k=0;k<=i;k++) applyEvent(st,TRACE[k]);
+  draw(st);
+  document.querySelectorAll('.row').forEach((r,k)=>{
+    r.className='row'+(k>i?' future':'')+(k===i?' cur':'');
+  });
+  const r=$('r'+i);
+  if(r){ $('log').scrollTop = r.offsetTop - $('log').clientHeight/2; }
+  updateClockUI();
+}
+
+function updateClockUI(){
+  $('clock').textContent=Math.round(clock)+' / '+total+' ms';
+  $('scrub').value=clock;
+  const frac=clock/total;
+  $('cursor').style.left='calc(44px + (100% - 44px) * '+frac+')';
+}
+
+function setPlaying(b){
+  playing=b;
+  $('btnPlay').innerHTML = b ? '&#10073;&#10073; Pause' : '&#9654; Play';
+  if(b){ lastTs=performance.now(); requestAnimationFrame(tick); }
+}
+
+function tick(ts){
+  if(!playing) return;
+  clock += (ts-lastTs)*speed; lastTs=ts;
+  if(clock>=total){ clock=total; seek(findIdx(clock)); setPlaying(false); return; }
+  const i=findIdx(clock);
+  if(i!==idx) seek(i); else updateClockUI();
+  requestAnimationFrame(tick);
+}
+
+$('btnPlay').onclick=()=>{
+  if(playing){ setPlaying(false); return; }
+  if(clock>=total){ clock=0; seek(-1); }   // replay from the start
+  setPlaying(true);
+};
+$('btnStep').onclick=()=>{
+  setPlaying(false);
+  if(idx+1<TRACE.length){ clock=TRACE[idx+1].t; seek(idx+1); }
+};
+$('btnReset').onclick=()=>{ setPlaying(false); clock=0; seek(-1); };
+$('speed').onchange=e=>{ speed=parseFloat(e.target.value); };
+$('scrub').oninput=e=>{ setPlaying(false); clock=parseFloat(e.target.value); seek(findIdx(clock)); };
+
+seek(-1);   // draw the initial (empty) state
+/* AUTO-PLAY: the simulation starts by itself half a second after the page opens.
+   (Use Pause / Reset / the scrub bar to control it.) */
+setTimeout(()=>{ if(!playing && idx===-1) $('btnPlay').click(); }, 500);
+</script>
+</body>
+</html>
